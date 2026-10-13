@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == 'zollamg90@gmail.com' && request.auth.token.email_verified == true;
+    }
+
+    // Website settings, services and packages: everyone can read, only Zolla can change.
+    match /settings/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /services/{id} { allow read: if true; allow write: if isAdmin(); }
+
+    // Blog: published posts are public; drafts only for Zolla.
+    match /posts/{id} {
+      allow read: if resource.data.published == true || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Busy 15-minute blocks. A block can only be created once, which prevents double bookings.
+    match /slots/{slotId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasOnly(['t']) && request.resource.data.t is int && request.resource.data.t == int(slotId);
+      allow delete: if isAdmin();
+      allow update: if false;
+    }
+
+    // Bookings: visitors create and read by reference; only Zolla lists or edits them.
+    match /bookings/{ref} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if ref.matches('ZMG-[A-Z2-9]{6}')
+        && request.resource.data.keys().hasOnly(['svc','svcTitle','svcTitleAm','min','price','start','end','blocks','name','phone','notes','topic','status','pay','created','lang','link'])
+        && request.resource.data.status in ['pending', 'confirmed']
+        && request.resource.data.pay in ['free', 'after']
+        && request.resource.data.link == ''
+        && request.resource.data.name is string && request.resource.data.name.size() > 1 && request.resource.data.name.size() <= 80
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 25
+        && request.resource.data.notes is string && request.resource.data.notes.size() <= 1500
+        && request.resource.data.start is int && request.resource.data.end is int
+        && request.resource.data.blocks is list && request.resource.data.blocks.size() > 0 && request.resource.data.blocks.size() <= 16
+        && existsAfter(/databases/$(database)/documents/slots/$(string(request.resource.data.blocks[0])));
+      allow update: if isAdmin()
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+            && request.resource.data.status == 'cancelled'
+            && resource.data.status in ['pending', 'confirmed']);
+      allow delete: if isAdmin();
+    }
+
+    // "My bookings" lookup by phone + PIN (document id is a hash of both).
+    match /mine/{id} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if id.size() == 64 && request.resource.data.keys().hasOnly(['refs']) && request.resource.data.refs is list && request.resource.data.refs.size() <= 50;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['refs']) && request.resource.data.refs is list && request.resource.data.refs.size() <= 50;
+    }
+  }
+}
